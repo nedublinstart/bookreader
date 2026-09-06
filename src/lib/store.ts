@@ -133,7 +133,6 @@ export function useAppData() {
       currentPage?: number;
       deadline: string;
       pdfId?: string | null;
-      guidedPageIndex?: number;
     }) => {
       const now = new Date().toISOString();
       const totalPages = Math.max(1, input.totalPages);
@@ -153,7 +152,7 @@ export function useAppData() {
               ? "reading"
               : "planned",
         pdfId: input.pdfId ?? null,
-        guidedPageIndex: input.guidedPageIndex ?? currentPage,
+        guidedPageIndex: currentPage,
         guidedChunkIndex: 0,
         createdAt: now,
         updatedAt: now,
@@ -239,11 +238,10 @@ export function useAppData() {
     [],
   );
 
-  const saveGuidedProgress = useCallback(
+  const saveReadingProgress = useCallback(
     (input: {
       bookId: string;
-      guidedPageIndex: number;
-      guidedChunkIndex: number;
+      currentPage: number;
       pagesCompleted: number;
       minutes: number;
     }) => {
@@ -255,10 +253,10 @@ export function useAppData() {
             bookId: input.bookId,
             pagesRead: input.pagesCompleted,
             minutes: Math.max(1, Math.round(input.minutes)),
-            note: "Курсорное чтение",
+            note: "Чтение PDF",
             date: todayISO(),
             createdAt: new Date().toISOString(),
-            guided: true,
+            guided: false,
           };
           sessions = [session, ...sessions];
         }
@@ -267,13 +265,13 @@ export function useAppData() {
           if (book.id !== input.bookId) return book;
           const currentPage = Math.min(
             book.totalPages,
-            Math.max(book.currentPage, input.guidedPageIndex),
+            Math.max(0, input.currentPage),
           );
           return {
             ...book,
             currentPage,
-            guidedPageIndex: input.guidedPageIndex,
-            guidedChunkIndex: input.guidedChunkIndex,
+            guidedPageIndex: currentPage,
+            guidedChunkIndex: 0,
             status: currentPage >= book.totalPages ? "done" : "reading",
             updatedAt: new Date().toISOString(),
           } satisfies Book;
@@ -380,7 +378,7 @@ export function useAppData() {
     updateBook,
     deleteBook,
     logSession,
-    saveGuidedProgress,
+    saveReadingProgress,
     deleteSession,
     updateSettings,
     seedDemo,

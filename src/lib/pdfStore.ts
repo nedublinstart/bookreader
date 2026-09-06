@@ -1,5 +1,5 @@
 const DB_NAME = "semestr-pdfs";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const STORE = "files";
 
 export type StoredPdf = {
@@ -9,8 +9,7 @@ export type StoredPdf = {
   mimeType: string;
   size: number;
   blob: Blob;
-  /** Extracted plain text per PDF page */
-  pages: string[];
+  pageCount: number;
   createdAt: string;
 };
 

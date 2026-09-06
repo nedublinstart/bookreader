@@ -18,7 +18,7 @@ import type { Book } from "@/lib/types";
 import { ProgressRing } from "./ProgressRing";
 import { BookCard } from "./BookCard";
 import { AddBookForm } from "./AddBookForm";
-import { GuidedReader } from "./GuidedReader";
+import { PdfReader } from "./PdfReader";
 
 type Panel = "none" | "add" | "settings";
 
@@ -30,7 +30,7 @@ export function TrackerApp() {
     hydrated,
     addBook,
     deleteBook,
-    saveGuidedProgress,
+    saveReadingProgress,
     updateSettings,
     seedDemo,
     resetAll,
@@ -53,14 +53,11 @@ export function TrackerApp() {
   );
   const planDoneCount = plan.filter((p) => p.done).length;
   const pagesToday = pagesOnDate(sessions, today);
-  const guidedTodayTotal = sessions
-    .filter((s) => s.date === today && s.guided)
-    .reduce((sum, s) => sum + s.pagesRead, 0);
   const minutesToday = minutesOnDate(sessions, today);
   const streak = computeStreak(sessions, today);
   const week = weekPages(sessions, today);
   const dayGoal = settings.booksPerDay * settings.pagesPerBookPerDay;
-  const goalProgress = guidedTodayTotal / Math.max(1, dayGoal);
+  const goalProgress = pagesToday / Math.max(1, dayGoal);
 
   function showToast(message: string) {
     setToast(message);
@@ -68,6 +65,11 @@ export function TrackerApp() {
   }
 
   function openRead(book: Book) {
+    if (!book.pdfId) {
+      showToast("Сначала добавь PDF к этой книге");
+      setPanel("add");
+      return;
+    }
     setSelectedId(book.id);
     setReadingId(book.id);
   }
@@ -85,18 +87,18 @@ export function TrackerApp() {
       <header className="animate-rise flex flex-col gap-6 border-b border-line pb-8 lg:flex-row lg:items-end lg:justify-between">
         <div className="max-w-2xl">
           <p className="text-xs font-semibold uppercase tracking-[0.22em] text-teal">
-            Трекер чтения для вуза · анти-скип
+            Трекер чтения для вуза
           </p>
           <h1 className="mt-3 font-serif text-5xl leading-[0.95] tracking-tight text-ink sm:text-6xl">
             Семестр
           </h1>
           <p className="mt-4 max-w-xl text-base leading-relaxed text-ink-soft sm:text-lg">
-            Страшно начинать — нормально. Не нужно «настроиться». Зажми кнопку и
-            пройди курсором{" "}
+            Загрузи PDF (хоть на 1500 страниц), читай нормальным ридером и держи
+            норму:{" "}
             <strong className="font-semibold text-ink">
               {settings.pagesPerBookPerDay} стр. × {settings.booksPerDay} книги
             </strong>
-            . Без курсора страницы почти не считаются.
+            .
           </p>
         </div>
         <div className="flex flex-wrap gap-3">
@@ -126,7 +128,9 @@ export function TrackerApp() {
               setSelectedId(book.id);
               setPanel("none");
               showToast(
-                data.pdfId ? "PDF на полке. Можно читать курсором." : "Книга с демо-текстом добавлена",
+                data.pdfId
+                  ? `PDF сохранён · ${data.totalPages} стр.`
+                  : "Книга добавлена",
               );
             }}
           />
@@ -136,16 +140,14 @@ export function TrackerApp() {
       {panel === "settings" ? (
         <section className="animate-rise mt-8 rounded-[24px] border border-line bg-white/80 p-6 shadow-[var(--shadow)]">
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-teal">
-            Самоконтроль без героизма
+            Норма
           </p>
           <h2 className="mt-2 font-serif text-3xl text-ink">Дневной план</h2>
-          <p className="mt-2 max-w-2xl text-sm text-ink-soft">
-            По умолчанию 4 книги × 10 страниц курсорным чтением. Скорость курсора
-            ограничена — нельзя пролететь текст.
-          </p>
-          <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+          <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
             <label>
-              <span className="mb-1.5 block text-sm font-medium text-ink-soft">Книг в день</span>
+              <span className="mb-1.5 block text-sm font-medium text-ink-soft">
+                Книг в день
+              </span>
               <input
                 type="number"
                 min={1}
@@ -158,7 +160,9 @@ export function TrackerApp() {
               />
             </label>
             <label>
-              <span className="mb-1.5 block text-sm font-medium text-ink-soft">Стр. на книгу</span>
+              <span className="mb-1.5 block text-sm font-medium text-ink-soft">
+                Стр. на книгу
+              </span>
               <input
                 type="number"
                 min={3}
@@ -168,21 +172,6 @@ export function TrackerApp() {
                   updateSettings({
                     pagesPerBookPerDay: Number(e.target.value) || 3,
                   })
-                }
-                className="w-full rounded-2xl border border-line bg-paper px-4 py-3 outline-none ring-teal/30 focus:ring-2"
-              />
-            </label>
-            <label>
-              <span className="mb-1.5 block text-sm font-medium text-ink-soft">
-                Макс. скорость (слов/мин)
-              </span>
-              <input
-                type="number"
-                min={80}
-                max={200}
-                value={settings.maxWpm}
-                onChange={(e) =>
-                  updateSettings({ maxWpm: Number(e.target.value) || 120 })
                 }
                 className="w-full rounded-2xl border border-line bg-paper px-4 py-3 outline-none ring-teal/30 focus:ring-2"
               />
@@ -217,56 +206,64 @@ export function TrackerApp() {
                 Привет, {settings.displayName || "студент"}
               </h2>
               <p className="mt-3 max-w-md text-ink-soft">
-                {guidedTodayTotal >= dayGoal
-                  ? "Дневная норма курсором закрыта. Можно остановиться без чувства вины."
-                  : guidedTodayTotal === 0
-                    ? "Ещё ни одной страницы курсором. Выбери срочную книгу и просто зажми кнопку."
-                    : `Ещё ${Math.max(0, dayGoal - guidedTodayTotal)} стр. курсором до нормы (${planDoneCount}/${settings.booksPerDay} книг).`}
+                {pagesToday >= dayGoal
+                  ? "Дневная норма закрыта. Можно остановиться."
+                  : pagesToday === 0
+                    ? "Ещё ни одной страницы. Открой PDF и листай дальше."
+                    : `Ещё ${Math.max(0, dayGoal - pagesToday)} стр. до нормы (${planDoneCount}/${settings.booksPerDay} книг).`}
               </p>
               <div className="mt-6 flex flex-wrap gap-3">
-                {plan[0] && !plan[0].done ? (
+                {plan[0] && !plan[0].done && plan[0].book.pdfId ? (
                   <button
                     type="button"
                     onClick={() => openRead(plan[0].book)}
                     className="rounded-full bg-teal px-5 py-3 text-sm font-semibold text-white hover:bg-teal-deep"
                   >
-                    Читать сейчас: {plan[0].book.title.slice(0, 28)}
+                    Читать: {plan[0].book.title.slice(0, 28)}
                     {plan[0].book.title.length > 28 ? "…" : ""}
                   </button>
                 ) : books.length === 0 ? (
-                  <>
-                    <button
-                      type="button"
-                      onClick={() => setPanel("add")}
-                      className="rounded-full bg-teal px-5 py-3 text-sm font-semibold text-white"
-                    >
-                      Добавить первую книгу
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        seedDemo();
-                        showToast("Демо-полка из 4 книг");
-                      }}
-                      className="rounded-full border border-line bg-white/70 px-5 py-3 text-sm font-semibold text-ink"
-                    >
-                      Загрузить демо
-                    </button>
-                  </>
+                  <button
+                    type="button"
+                    onClick={() => setPanel("add")}
+                    className="rounded-full bg-teal px-5 py-3 text-sm font-semibold text-white"
+                  >
+                    Добавить PDF
+                  </button>
+                ) : selectedBook?.pdfId ? (
+                  <button
+                    type="button"
+                    onClick={() => openRead(selectedBook)}
+                    className="rounded-full bg-teal px-5 py-3 text-sm font-semibold text-white"
+                  >
+                    Продолжить PDF
+                  </button>
                 ) : (
                   <button
                     type="button"
-                    onClick={() => selectedBook && openRead(selectedBook)}
+                    onClick={() => setPanel("add")}
                     className="rounded-full bg-teal px-5 py-3 text-sm font-semibold text-white"
                   >
-                    Продолжить чтение
+                    Добавить PDF
                   </button>
                 )}
+                {books.length === 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      seedDemo();
+                      showToast("Демо-полка без PDF — добавь свои файлы");
+                    }}
+                    className="rounded-full border border-line bg-white/70 px-5 py-3 text-sm font-semibold text-ink"
+                  >
+                    Демо-полка
+                  </button>
+                ) : null}
               </div>
             </div>
             <ProgressRing
               value={goalProgress}
-              label={`${guidedTodayTotal}`}
+              label={`${pagesToday}`}
               sublabel={`из ${dayGoal}`}
             />
           </div>
@@ -278,7 +275,11 @@ export function TrackerApp() {
               hint={streak > 0 ? "Не рви цепочку" : "Начни с 1 страницы"}
               glow={streak > 0}
             />
-            <Stat label="Минут сегодня" value={`${minutesToday}`} hint={`${pagesToday} стр. всего`} />
+            <Stat
+              label="Минут сегодня"
+              value={`${minutesToday}`}
+              hint={`${pagesToday} стр. всего`}
+            />
             <Stat
               label="Книг в плане"
               value={`${planDoneCount}/${settings.booksPerDay}`}
@@ -293,12 +294,12 @@ export function TrackerApp() {
               План на сегодня
             </p>
             <h3 className="mt-2 font-serif text-2xl">
-              {settings.booksPerDay}×{settings.pagesPerBookPerDay} без самообмана
+              {settings.booksPerDay}×{settings.pagesPerBookPerDay}
             </h3>
             <div className="mt-5 space-y-3">
               {plan.length === 0 ? (
                 <p className="text-sm leading-relaxed text-white/70">
-                  Добавь книги с PDF или возьми демо — план соберётся сам.
+                  Добавь PDF — план соберётся сам.
                 </p>
               ) : (
                 plan.map((item) => (
@@ -311,7 +312,8 @@ export function TrackerApp() {
                     <div className="min-w-0">
                       <p className="truncate font-medium">{item.book.title}</p>
                       <p className="mt-1 text-sm text-white/60">
-                        {item.guidedToday}/{item.goal} стр. курсором
+                        {item.guidedToday}/{item.goal} стр. сегодня
+                        {!item.book.pdfId ? " · нет PDF" : ""}
                       </p>
                     </div>
                     <span
@@ -372,39 +374,26 @@ export function TrackerApp() {
         <div className="mb-5 flex items-end justify-between gap-4">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-teal">
-              Полка семестра
+              Полка
             </p>
             <h2 className="mt-2 font-serif text-4xl text-ink">Книги</h2>
           </div>
-          <p className="text-sm text-ink-soft">Сортировка по срочности</p>
         </div>
 
         {sortedBooks.length === 0 ? (
           <div className="rounded-[28px] border border-dashed border-line bg-white/50 px-6 py-16 text-center">
             <h3 className="font-serif text-3xl text-ink">Полка пустая</h3>
             <p className="mx-auto mt-3 max-w-md text-ink-soft">
-              Страх чтения — не приговор. Добавь PDF или открой демо-текст и пройди
-              первые страницы курсором.
+              Добавь свой PDF — даже если там 1500 страниц. Мы не парсим весь текст,
+              только открываем страницы по одной.
             </p>
-            <div className="mt-6 flex flex-wrap justify-center gap-3">
-              <button
-                type="button"
-                onClick={() => setPanel("add")}
-                className="rounded-full bg-teal px-5 py-3 text-sm font-semibold text-white"
-              >
-                Добавить книгу
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  seedDemo();
-                  showToast("Демо-полка загружена");
-                }}
-                className="rounded-full border border-line bg-white px-5 py-3 text-sm font-semibold text-ink"
-              >
-                Посмотреть демо
-              </button>
-            </div>
+            <button
+              type="button"
+              onClick={() => setPanel("add")}
+              className="mt-6 rounded-full bg-teal px-5 py-3 text-sm font-semibold text-white"
+            >
+              Добавить PDF
+            </button>
           </div>
         ) : (
           <div className="grid gap-5 md:grid-cols-2">
@@ -413,7 +402,7 @@ export function TrackerApp() {
                 key={book.id}
                 book={book}
                 active={selectedBook?.id === book.id}
-                guidedToday={guidedPagesOnDate(sessions, today, book.id)}
+                pagesToday={guidedPagesOnDate(sessions, today, book.id)}
                 dailyGoal={settings.pagesPerBookPerDay}
                 onSelect={() => setSelectedId(book.id)}
                 onRead={() => openRead(book)}
@@ -434,21 +423,21 @@ export function TrackerApp() {
               <p className="mt-1 text-ink-soft">
                 {selectedBook.author || "Автор не указан"}
                 {selectedBook.course ? ` · ${selectedBook.course}` : ""}
-                {selectedBook.pdfId ? " · PDF" : " · демо-текст"}
+                {selectedBook.pdfId ? " · PDF" : " · нет PDF"}
               </p>
               <p className="mt-2 text-sm text-ink-soft">
-                Дедлайн {formatShortDate(selectedBook.deadline)} · курсор: стр.{" "}
-                {selectedBook.guidedPageIndex + 1}
+                Дедлайн {formatShortDate(selectedBook.deadline)} · позиция: стр.{" "}
+                {selectedBook.currentPage + 1} / {selectedBook.totalPages}
               </p>
             </div>
             <div className="flex flex-wrap gap-3">
-              {selectedBook.status !== "done" ? (
+              {selectedBook.pdfId && selectedBook.status !== "done" ? (
                 <button
                   type="button"
                   onClick={() => openRead(selectedBook)}
                   className="rounded-full bg-ink px-5 py-3 text-sm font-semibold text-white"
                 >
-                  Читать курсором
+                  Открыть PDF
                 </button>
               ) : null}
               <button
@@ -470,10 +459,7 @@ export function TrackerApp() {
       ) : null}
 
       <footer className="mt-16 flex flex-col gap-4 border-t border-line pt-8 text-sm text-ink-soft sm:flex-row sm:items-center sm:justify-between">
-        <p>
-          Данные и PDF хранятся локально в браузере. Курсорное чтение — основной способ
-          засчитывать страницы.
-        </p>
+        <p>PDF хранится локально в браузере (IndexedDB). Большие файлы ок.</p>
         <button
           type="button"
           onClick={() => {
@@ -497,24 +483,22 @@ export function TrackerApp() {
       ) : null}
 
       {readingBook ? (
-        <GuidedReader
+        <PdfReader
           book={readingBook}
-          maxWpm={settings.maxWpm}
           pagesGoalToday={settings.pagesPerBookPerDay}
-          guidedToday={guidedPagesOnDate(sessions, today, readingBook.id)}
+          pagesToday={guidedPagesOnDate(sessions, today, readingBook.id)}
           onClose={() => setReadingId(null)}
           onSave={(input) => {
-            saveGuidedProgress({
+            saveReadingProgress({
               bookId: readingBook.id,
-              guidedPageIndex: input.guidedPageIndex,
-              guidedChunkIndex: input.guidedChunkIndex,
+              currentPage: input.currentPage,
               pagesCompleted: input.pagesCompleted,
               minutes: input.minutes,
             });
             showToast(
               input.pagesCompleted > 0
-                ? `+${input.pagesCompleted} стр. курсором`
-                : "Прогресс курсора сохранён",
+                ? `+${input.pagesCompleted} стр.`
+                : "Позиция сохранена",
             );
           }}
         />

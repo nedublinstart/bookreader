@@ -117,8 +117,9 @@ export function guidedPagesOnDate(
   date: string,
   bookId?: string,
 ): number {
+  // Count all reading sessions for the day (PDF reader progress)
   return sessionsOnDate(sessions, date)
-    .filter((s) => s.guided && (!bookId || s.bookId === bookId))
+    .filter((s) => !bookId || s.bookId === bookId)
     .reduce((sum, s) => sum + s.pagesRead, 0);
 }
 
@@ -131,7 +132,7 @@ export function computeStreak(
   today = todayISO(),
 ): number {
   const days = new Set(
-    sessions.filter((s) => s.pagesRead > 0 && s.guided).map((s) => s.date),
+    sessions.filter((s) => s.pagesRead > 0).map((s) => s.date),
   );
   if (days.size === 0) return 0;
 

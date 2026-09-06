@@ -3,7 +3,7 @@
 import { FormEvent, useState } from "react";
 import { todayISO, uid } from "@/lib/reading";
 import { savePdf } from "@/lib/pdfStore";
-import { extractPdfPages } from "@/lib/pdfText";
+import { getPdfPageCount } from "@/lib/pdf";
 
 type Props = {
   onCancel: () => void;
@@ -15,7 +15,6 @@ type Props = {
     currentPage: number;
     deadline: string;
     pdfId: string | null;
-    guidedPageIndex: number;
   }) => void;
 };
 
@@ -45,8 +44,8 @@ export function AddBookForm({ onCancel, onSubmit }: Props) {
       let startPage = Math.min(Math.max(0, currentPage), pages);
 
       if (file) {
-        const extracted = await extractPdfPages(file);
-        pages = Math.max(1, extracted.pageCount);
+        // Only count pages — do NOT extract text from all 1500 pages
+        pages = Math.max(1, await getPdfPageCount(file));
         startPage = Math.min(startPage, Math.max(0, pages - 1));
         pdfId = uid();
         await savePdf({
@@ -56,26 +55,32 @@ export function AddBookForm({ onCancel, onSubmit }: Props) {
           mimeType: file.type || "application/pdf",
           size: file.size,
           blob: file,
-          pages: extracted.pages,
+          pageCount: pages,
           createdAt: new Date().toISOString(),
         });
+
+        if (!title.trim()) {
+          // keep title from form; if empty use filename
+        }
+        if (!title) {
+          // no-op, title required above
+        }
       }
 
       onSubmit({
-        title,
+        title: title.trim() || (file ? file.name.replace(/\.pdf$/i, "") : "Без названия"),
         author,
         course,
         totalPages: pages,
         currentPage: startPage,
         deadline,
         pdfId,
-        guidedPageIndex: startPage,
       });
     } catch (err) {
       setError(
         err instanceof Error
           ? err.message
-          : "Не удалось обработать PDF. Можно сохранить без файла.",
+          : "Не удалось открыть PDF. Проверь файл и попробуй снова.",
       );
     } finally {
       setBusy(false);
@@ -92,10 +97,10 @@ export function AddBookForm({ onCancel, onSubmit }: Props) {
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-teal">
             Новая книга
           </p>
-          <h2 className="mt-2 font-serif text-3xl text-ink">Добавить в семестр</h2>
+          <h2 className="mt-2 font-serif text-3xl text-ink">Добавить PDF</h2>
           <p className="mt-2 max-w-xl text-sm text-ink-soft">
-            Загрузи PDF. Дальше чтение только курсором: зажал — текст едет, отпустил —
-            стоит. Так сложнее «пролистать под музыку».
+            Можно кидать большие PDF (хоть 1500 страниц). Файл сохранится в браузере,
+            страницы рисуются по одной — без долгого «парсинга всего текста».
           </p>
         </div>
         <button type="button" onClick={onCancel} className="text-sm font-medium text-ink-soft">
@@ -109,13 +114,19 @@ export function AddBookForm({ onCancel, onSubmit }: Props) {
           <input
             type="file"
             accept="application/pdf,.pdf"
-            onChange={(e) => setFile(e.target.files?.[0] ?? null)}
+            onChange={(e) => {
+              const next = e.target.files?.[0] ?? null;
+              setFile(next);
+              if (next && !title.trim()) {
+                setTitle(next.name.replace(/\.pdf$/i, ""));
+              }
+            }}
             className="w-full rounded-2xl border border-line bg-paper px-4 py-3 file:mr-3 file:rounded-full file:border-0 file:bg-teal file:px-3 file:py-1.5 file:text-sm file:font-semibold file:text-white"
           />
           <span className="mt-1 block text-xs text-ink-soft">
             {file
               ? `${file.name} · ${(file.size / 1024 / 1024).toFixed(1)} МБ`
-              : "Без PDF откроется демо-текст — можно потренировать режим без страха."}
+              : "Выбери PDF учебника — даже если он огромный."}
           </span>
         </label>
         <label className="sm:col-span-2">
@@ -158,7 +169,9 @@ export function AddBookForm({ onCancel, onSubmit }: Props) {
           />
         </label>
         <label>
-          <span className="mb-1.5 block text-sm font-medium text-ink-soft">Уже на странице</span>
+          <span className="mb-1.5 block text-sm font-medium text-ink-soft">
+            Начать со страницы
+          </span>
           <input
             type="number"
             min={0}
@@ -191,7 +204,7 @@ export function AddBookForm({ onCancel, onSubmit }: Props) {
           disabled={busy}
           className="rounded-full bg-teal px-5 py-3 text-sm font-semibold text-white disabled:opacity-60"
         >
-          {busy ? "Обрабатываем PDF…" : "Сохранить книгу"}
+          {busy ? "Считаем страницы PDF…" : "Сохранить книгу"}
         </button>
         <button
           type="button"

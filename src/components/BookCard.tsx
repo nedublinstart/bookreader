@@ -12,14 +12,14 @@ import { PaceBadge } from "./PaceBadge";
 export function BookCard({
   book,
   active,
-  guidedToday,
+  pagesToday,
   dailyGoal,
   onSelect,
   onRead,
 }: {
   book: Book;
   active?: boolean;
-  guidedToday: number;
+  pagesToday: number;
   dailyGoal: number;
   onSelect: () => void;
   onRead: () => void;
@@ -28,7 +28,7 @@ export function BookCard({
   const progress = bookProgress(book);
   const left = pagesLeft(book);
   const done = book.status === "done" || book.currentPage >= book.totalPages;
-  const todayDone = guidedToday >= dailyGoal;
+  const todayDone = pagesToday >= dailyGoal;
 
   return (
     <article
@@ -47,10 +47,14 @@ export function BookCard({
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.16em] text-teal">
               {book.course || "Без предмета"}
-              {book.pdfId ? " · PDF" : " · демо-текст"}
+              {book.pdfId ? " · PDF" : ""}
             </p>
-            <h3 className="mt-2 font-serif text-2xl leading-tight text-ink">{book.title}</h3>
-            <p className="mt-1 text-sm text-ink-soft">{book.author || "Автор не указан"}</p>
+            <h3 className="mt-2 font-serif text-2xl leading-tight text-ink">
+              {book.title}
+            </h3>
+            <p className="mt-1 text-sm text-ink-soft">
+              {book.author || "Автор не указан"}
+            </p>
           </div>
           <PaceBadge status={pace.status} />
         </div>
@@ -72,13 +76,13 @@ export function BookCard({
 
         <div className="mt-3 flex justify-between text-sm">
           <span className="text-ink-soft">
-            Сегодня курсором: {Math.min(guidedToday, dailyGoal)}/{dailyGoal}
+            Сегодня: {Math.min(pagesToday, dailyGoal)}/{dailyGoal}
           </span>
           {todayDone ? (
             <span className="font-semibold text-good">норма ✓</span>
           ) : (
             <span className="font-semibold text-amber">
-              ещё {Math.max(0, dailyGoal - guidedToday)}
+              ещё {Math.max(0, dailyGoal - pagesToday)}
             </span>
           )}
         </div>
@@ -111,7 +115,7 @@ export function BookCard({
             }}
             className="rounded-full bg-ink px-4 py-2 text-sm font-semibold text-white hover:bg-teal-deep"
           >
-            Читать курсором
+            {book.pdfId ? "Открыть PDF" : "Открыть"}
           </button>
         </div>
       ) : null}

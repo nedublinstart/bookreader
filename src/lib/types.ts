@@ -7,8 +7,11 @@ export type Book = {
   course: string;
   totalPages: number;
   currentPage: number;
-  deadline: string; // YYYY-MM-DD
+  deadline: string;
   status: BookStatus;
+  pdfId: string | null;
+  guidedPageIndex: number;
+  guidedChunkIndex: number;
   createdAt: string;
   updatedAt: string;
 };
@@ -19,14 +22,18 @@ export type ReadingSession = {
   pagesRead: number;
   minutes: number;
   note: string;
-  date: string; // YYYY-MM-DD
+  date: string;
   createdAt: string;
+  guided: boolean;
 };
 
 export type Settings = {
   dailyPageGoal: number;
   dailyMinuteGoal: number;
   displayName: string;
+  booksPerDay: number;
+  pagesPerBookPerDay: number;
+  maxWpm: number;
 };
 
 export type AppData = {
@@ -36,9 +43,12 @@ export type AppData = {
 };
 
 export const DEFAULT_SETTINGS: Settings = {
-  dailyPageGoal: 30,
-  dailyMinuteGoal: 45,
+  dailyPageGoal: 40,
+  dailyMinuteGoal: 60,
   displayName: "Студент",
+  booksPerDay: 4,
+  pagesPerBookPerDay: 10,
+  maxWpm: 160,
 };
 
-export const STORAGE_KEY = "semestr-reading-tracker-v1";
+export const STORAGE_KEY = "semestr-reading-tracker-v2";

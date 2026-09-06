@@ -10,6 +10,7 @@ import {
   STORAGE_KEY,
 } from "./types";
 import { todayISO, uid } from "./reading";
+import { deletePdf } from "./pdfStore";
 
 const emptyData: AppData = {
   books: [],
@@ -24,13 +25,46 @@ function readStorage(): AppData {
     if (!raw) return emptyData;
     const parsed = JSON.parse(raw) as Partial<AppData>;
     return {
-      books: parsed.books ?? [],
-      sessions: parsed.sessions ?? [],
+      books: (parsed.books ?? []).map(normalizeBook),
+      sessions: (parsed.sessions ?? []).map(normalizeSession),
       settings: { ...DEFAULT_SETTINGS, ...parsed.settings },
     };
   } catch {
     return emptyData;
   }
+}
+
+function normalizeBook(book: Partial<Book> & { id: string }): Book {
+  return {
+    id: book.id,
+    title: book.title ?? "Без названия",
+    author: book.author ?? "",
+    course: book.course ?? "",
+    totalPages: book.totalPages ?? 1,
+    currentPage: book.currentPage ?? 0,
+    deadline: book.deadline ?? todayISO(),
+    status: book.status ?? "planned",
+    pdfId: book.pdfId ?? null,
+    guidedPageIndex: book.guidedPageIndex ?? book.currentPage ?? 0,
+    guidedChunkIndex: book.guidedChunkIndex ?? 0,
+    createdAt: book.createdAt ?? new Date().toISOString(),
+    updatedAt: book.updatedAt ?? new Date().toISOString(),
+  };
+}
+
+function normalizeSession(
+  session: Partial<ReadingSession> & { id: string },
+): ReadingSession {
+  return {
+    id: session.id,
+    bookId: session.bookId ?? "",
+    pagesRead: session.pagesRead ?? 0,
+    minutes: session.minutes ?? 0,
+    note: session.note ?? "",
+    date: session.date ?? todayISO(),
+    createdAt: session.createdAt ?? new Date().toISOString(),
+    guided: Boolean(session.guided),
+  };
 }
 
 function writeStorage(data: AppData) {
@@ -78,7 +112,6 @@ function getHydratedServerSnapshot() {
 }
 
 function subscribeHydrated(onStoreChange: () => void) {
-  // Client mount flips hydrated via useSyncExternalStore comparing snapshots
   queueMicrotask(onStoreChange);
   return () => {};
 }
@@ -99,21 +132,29 @@ export function useAppData() {
       totalPages: number;
       currentPage?: number;
       deadline: string;
+      pdfId?: string | null;
+      guidedPageIndex?: number;
     }) => {
       const now = new Date().toISOString();
-      const currentPage = Math.min(
-        input.currentPage ?? 0,
-        Math.max(1, input.totalPages),
-      );
+      const totalPages = Math.max(1, input.totalPages);
+      const currentPage = Math.min(input.currentPage ?? 0, totalPages);
       const book: Book = {
         id: uid(),
         title: input.title.trim(),
         author: input.author.trim(),
         course: input.course.trim(),
-        totalPages: Math.max(1, input.totalPages),
+        totalPages,
         currentPage,
         deadline: input.deadline,
-        status: currentPage >= input.totalPages ? "done" : currentPage > 0 ? "reading" : "planned",
+        status:
+          currentPage >= totalPages
+            ? "done"
+            : currentPage > 0
+              ? "reading"
+              : "planned",
+        pdfId: input.pdfId ?? null,
+        guidedPageIndex: input.guidedPageIndex ?? currentPage,
+        guidedChunkIndex: 0,
         createdAt: now,
         updatedAt: now,
       };
@@ -137,7 +178,15 @@ export function useAppData() {
     }));
   }, []);
 
-  const deleteBook = useCallback((id: string) => {
+  const deleteBook = useCallback(async (id: string) => {
+    const book = getSnapshot().books.find((b) => b.id === id);
+    if (book?.pdfId) {
+      try {
+        await deletePdf(book.pdfId);
+      } catch {
+        // ignore
+      }
+    }
     update((prev) => ({
       ...prev,
       books: prev.books.filter((b) => b.id !== id),
@@ -152,6 +201,7 @@ export function useAppData() {
       minutes: number;
       note?: string;
       date?: string;
+      guided?: boolean;
     }) => {
       const pagesRead = Math.max(0, Math.floor(input.pagesRead));
       if (pagesRead <= 0 && input.minutes <= 0) return null;
@@ -164,6 +214,7 @@ export function useAppData() {
         note: (input.note ?? "").trim(),
         date: input.date ?? todayISO(),
         createdAt: new Date().toISOString(),
+        guided: Boolean(input.guided),
       };
 
       update((prev) => {
@@ -180,14 +231,56 @@ export function useAppData() {
             updatedAt: new Date().toISOString(),
           } satisfies Book;
         });
-        return {
-          ...prev,
-          books,
-          sessions: [session, ...prev.sessions],
-        };
+        return { ...prev, books, sessions: [session, ...prev.sessions] };
       });
 
       return session;
+    },
+    [],
+  );
+
+  const saveGuidedProgress = useCallback(
+    (input: {
+      bookId: string;
+      guidedPageIndex: number;
+      guidedChunkIndex: number;
+      pagesCompleted: number;
+      minutes: number;
+    }) => {
+      update((prev) => {
+        let sessions = prev.sessions;
+        if (input.pagesCompleted > 0) {
+          const session: ReadingSession = {
+            id: uid(),
+            bookId: input.bookId,
+            pagesRead: input.pagesCompleted,
+            minutes: Math.max(1, Math.round(input.minutes)),
+            note: "Курсорное чтение",
+            date: todayISO(),
+            createdAt: new Date().toISOString(),
+            guided: true,
+          };
+          sessions = [session, ...sessions];
+        }
+
+        const books = prev.books.map((book) => {
+          if (book.id !== input.bookId) return book;
+          const currentPage = Math.min(
+            book.totalPages,
+            Math.max(book.currentPage, input.guidedPageIndex),
+          );
+          return {
+            ...book,
+            currentPage,
+            guidedPageIndex: input.guidedPageIndex,
+            guidedChunkIndex: input.guidedChunkIndex,
+            status: currentPage >= book.totalPages ? "done" : "reading",
+            updatedAt: new Date().toISOString(),
+          } satisfies Book;
+        });
+
+        return { ...prev, books, sessions };
+      });
     },
     [],
   );
@@ -229,89 +322,49 @@ export function useAppData() {
   }, []);
 
   const seedDemo = useCallback(() => {
-    const today = todayISO();
     const inDays = (n: number) => {
       const d = new Date();
       d.setDate(d.getDate() + n);
       return todayISO(d);
     };
 
-    const books: Book[] = [
-      {
-        id: uid(),
-        title: "История западной философии",
-        author: "Бертран Рассел",
-        course: "Философия",
-        totalPages: 820,
-        currentPage: 146,
-        deadline: inDays(21),
-        status: "reading",
-        createdAt: new Date(Date.now() - 12 * 86_400_000).toISOString(),
-        updatedAt: new Date().toISOString(),
-      },
-      {
-        id: uid(),
-        title: "Алгоритмы: построение и анализ",
-        author: "Кормен и др.",
-        course: "Алгоритмы",
-        totalPages: 540,
-        currentPage: 88,
-        deadline: inDays(10),
-        status: "reading",
-        createdAt: new Date(Date.now() - 8 * 86_400_000).toISOString(),
-        updatedAt: new Date().toISOString(),
-      },
-      {
-        id: uid(),
-        title: "Русская литература XIX века",
-        author: "Хрестоматия",
-        course: "Литература",
-        totalPages: 260,
-        currentPage: 0,
-        deadline: inDays(35),
-        status: "planned",
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      },
-    ];
-
-    const sessions: ReadingSession[] = [
-      {
-        id: uid(),
-        bookId: books[0].id,
-        pagesRead: 22,
-        minutes: 40,
-        note: "Глава про Платона",
-        date: today,
-        createdAt: new Date().toISOString(),
-      },
-      {
-        id: uid(),
-        bookId: books[1].id,
-        pagesRead: 18,
-        minutes: 35,
-        note: "",
-        date: todayISO(new Date(Date.now() - 86_400_000)),
-        createdAt: new Date(Date.now() - 86_400_000).toISOString(),
-      },
-      {
-        id: uid(),
-        bookId: books[0].id,
-        pagesRead: 16,
-        minutes: 28,
-        note: "",
-        date: todayISO(new Date(Date.now() - 2 * 86_400_000)),
-        createdAt: new Date(Date.now() - 2 * 86_400_000).toISOString(),
-      },
-    ];
+    const mk = (
+      title: string,
+      author: string,
+      course: string,
+      totalPages: number,
+      currentPage: number,
+      deadlineDays: number,
+      createdDaysAgo: number,
+    ): Book => ({
+      id: uid(),
+      title,
+      author,
+      course,
+      totalPages,
+      currentPage,
+      deadline: inDays(deadlineDays),
+      status: currentPage > 0 ? "reading" : "planned",
+      pdfId: null,
+      guidedPageIndex: currentPage,
+      guidedChunkIndex: 0,
+      createdAt: new Date(Date.now() - createdDaysAgo * 86_400_000).toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
 
     update(() => ({
-      books,
-      sessions,
+      books: [
+        mk("История западной философии", "Бертран Рассел", "Философия", 120, 12, 21, 12),
+        mk("Алгоритмы: построение и анализ", "Кормен и др.", "Алгоритмы", 90, 8, 10, 8),
+        mk("Русская литература XIX века", "Хрестоматия", "Литература", 80, 0, 35, 1),
+        mk("Социология культуры", "Л. Ионин", "Социология", 100, 5, 18, 6),
+      ],
+      sessions: [],
       settings: {
-        dailyPageGoal: 35,
-        dailyMinuteGoal: 45,
+        ...DEFAULT_SETTINGS,
         displayName: "Студент",
+        booksPerDay: 4,
+        pagesPerBookPerDay: 10,
       },
     }));
   }, []);
@@ -327,6 +380,7 @@ export function useAppData() {
     updateBook,
     deleteBook,
     logSession,
+    saveGuidedProgress,
     deleteSession,
     updateSettings,
     seedDemo,

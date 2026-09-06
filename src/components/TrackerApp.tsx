@@ -4,24 +4,23 @@ import { useMemo, useState } from "react";
 import { useAppData } from "@/lib/store";
 import {
   computeStreak,
+  dailyBookPlan,
   formatDateRu,
   formatShortDate,
+  guidedPagesOnDate,
   minutesOnDate,
   pagesOnDate,
   sortBooksByUrgency,
-  suggestDailyGoal,
   todayISO,
   weekPages,
-  bookPace,
 } from "@/lib/reading";
+import type { Book } from "@/lib/types";
 import { ProgressRing } from "./ProgressRing";
 import { BookCard } from "./BookCard";
 import { AddBookForm } from "./AddBookForm";
-import { LogSessionForm } from "./LogSessionForm";
-import { PaceBadge } from "./PaceBadge";
-import type { Book } from "@/lib/types";
+import { GuidedReader } from "./GuidedReader";
 
-type Panel = "none" | "add" | "log" | "settings";
+type Panel = "none" | "add" | "settings";
 
 export function TrackerApp() {
   const {
@@ -31,8 +30,7 @@ export function TrackerApp() {
     hydrated,
     addBook,
     deleteBook,
-    logSession,
-    deleteSession,
+    saveGuidedProgress,
     updateSettings,
     seedDemo,
     resetAll,
@@ -40,37 +38,38 @@ export function TrackerApp() {
 
   const [panel, setPanel] = useState<Panel>("none");
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [readingId, setReadingId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
 
   const today = todayISO();
   const sortedBooks = useMemo(() => sortBooksByUrgency(books), [books]);
   const selectedBook =
     books.find((b) => b.id === selectedId) ?? sortedBooks[0] ?? null;
+  const readingBook = books.find((b) => b.id === readingId) ?? null;
 
+  const plan = useMemo(
+    () => dailyBookPlan(books, sessions, settings, today),
+    [books, sessions, settings, today],
+  );
+  const planDoneCount = plan.filter((p) => p.done).length;
   const pagesToday = pagesOnDate(sessions, today);
+  const guidedTodayTotal = sessions
+    .filter((s) => s.date === today && s.guided)
+    .reduce((sum, s) => sum + s.pagesRead, 0);
   const minutesToday = minutesOnDate(sessions, today);
   const streak = computeStreak(sessions, today);
   const week = weekPages(sessions, today);
-  const suggested = suggestDailyGoal(books, today);
-  const goalProgress = pagesToday / Math.max(1, settings.dailyPageGoal);
-  const activeBooks = books.filter(
-    (b) => b.status !== "done" && b.currentPage < b.totalPages,
-  );
-  const urgent = activeBooks
-    .map((b) => ({ book: b, pace: bookPace(b, today) }))
-    .filter((x) => x.pace.status === "behind" || x.pace.status === "overdue")
-    .slice(0, 3);
-
-  const recentSessions = sessions.slice(0, 8);
+  const dayGoal = settings.booksPerDay * settings.pagesPerBookPerDay;
+  const goalProgress = guidedTodayTotal / Math.max(1, dayGoal);
 
   function showToast(message: string) {
     setToast(message);
-    window.setTimeout(() => setToast(null), 2200);
+    window.setTimeout(() => setToast(null), 2400);
   }
 
-  function openLog(book: Book) {
+  function openRead(book: Book) {
     setSelectedId(book.id);
-    setPanel("log");
+    setReadingId(book.id);
   }
 
   if (!hydrated) {
@@ -86,30 +85,34 @@ export function TrackerApp() {
       <header className="animate-rise flex flex-col gap-6 border-b border-line pb-8 lg:flex-row lg:items-end lg:justify-between">
         <div className="max-w-2xl">
           <p className="text-xs font-semibold uppercase tracking-[0.22em] text-teal">
-            Трекер чтения для вуза
+            Трекер чтения для вуза · анти-скип
           </p>
           <h1 className="mt-3 font-serif text-5xl leading-[0.95] tracking-tight text-ink sm:text-6xl">
             Семестр
           </h1>
           <p className="mt-4 max-w-xl text-base leading-relaxed text-ink-soft sm:text-lg">
-            Держи учебники в графике до зачёта: дневная норма, стрик и честный темп
-            по каждой книге — без самообмана.
+            Страшно начинать — нормально. Не нужно «настроиться». Зажми кнопку и
+            пройди курсором{" "}
+            <strong className="font-semibold text-ink">
+              {settings.pagesPerBookPerDay} стр. × {settings.booksPerDay} книги
+            </strong>
+            . Без курсора страницы почти не считаются.
           </p>
         </div>
         <div className="flex flex-wrap gap-3">
           <button
             type="button"
             onClick={() => setPanel(panel === "add" ? "none" : "add")}
-            className="rounded-full bg-teal px-5 py-3 text-sm font-semibold text-white transition hover:bg-teal-deep"
+            className="rounded-full bg-teal px-5 py-3 text-sm font-semibold text-white hover:bg-teal-deep"
           >
-            Добавить книгу
+            Добавить книгу / PDF
           </button>
           <button
             type="button"
             onClick={() => setPanel(panel === "settings" ? "none" : "settings")}
             className="rounded-full border border-line bg-white/70 px-5 py-3 text-sm font-semibold text-ink"
           >
-            Норма
+            Норма дня
           </button>
         </div>
       </header>
@@ -122,24 +125,8 @@ export function TrackerApp() {
               const book = addBook(data);
               setSelectedId(book.id);
               setPanel("none");
-              showToast("Книга добавлена на полку");
-            }}
-          />
-        </div>
-      ) : null}
-
-      {panel === "log" && selectedBook ? (
-        <div className="mt-8">
-          <LogSessionForm
-            book={selectedBook}
-            onCancel={() => setPanel("none")}
-            onSubmit={(data) => {
-              logSession({ bookId: selectedBook.id, ...data });
-              setPanel("none");
               showToast(
-                data.pagesRead > 0
-                  ? `+${data.pagesRead} стр. записано`
-                  : "Сессия сохранена",
+                data.pdfId ? "PDF на полке. Можно читать курсором." : "Книга с демо-текстом добавлена",
               );
             }}
           />
@@ -147,41 +134,55 @@ export function TrackerApp() {
       ) : null}
 
       {panel === "settings" ? (
-        <section className="animate-rise mt-8 rounded-[24px] border border-line bg-white/80 p-6 shadow-[var(--shadow)] backdrop-blur-md">
+        <section className="animate-rise mt-8 rounded-[24px] border border-line bg-white/80 p-6 shadow-[var(--shadow)]">
           <p className="text-xs font-semibold uppercase tracking-[0.16em] text-teal">
-            Самоконтроль
+            Самоконтроль без героизма
           </p>
-          <h2 className="mt-2 font-serif text-3xl text-ink">Дневная норма</h2>
+          <h2 className="mt-2 font-serif text-3xl text-ink">Дневной план</h2>
           <p className="mt-2 max-w-2xl text-sm text-ink-soft">
-            По текущим дедлайнам тебе нужно примерно{" "}
-            <strong className="text-ink">{suggested} стр./день</strong>. Поставь цель
-            чуть выше комфортной — так стрик держит лучше.
+            По умолчанию 4 книги × 10 страниц курсорным чтением. Скорость курсора
+            ограничена — нельзя пролететь текст.
           </p>
-          <div className="mt-6 grid gap-4 sm:grid-cols-3">
+          <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <label>
-              <span className="mb-1.5 block text-sm font-medium text-ink-soft">
-                Страниц в день
-              </span>
+              <span className="mb-1.5 block text-sm font-medium text-ink-soft">Книг в день</span>
               <input
                 type="number"
-                min={5}
-                value={settings.dailyPageGoal}
+                min={1}
+                max={8}
+                value={settings.booksPerDay}
                 onChange={(e) =>
-                  updateSettings({ dailyPageGoal: Number(e.target.value) || 5 })
+                  updateSettings({ booksPerDay: Number(e.target.value) || 1 })
+                }
+                className="w-full rounded-2xl border border-line bg-paper px-4 py-3 outline-none ring-teal/30 focus:ring-2"
+              />
+            </label>
+            <label>
+              <span className="mb-1.5 block text-sm font-medium text-ink-soft">Стр. на книгу</span>
+              <input
+                type="number"
+                min={3}
+                max={40}
+                value={settings.pagesPerBookPerDay}
+                onChange={(e) =>
+                  updateSettings({
+                    pagesPerBookPerDay: Number(e.target.value) || 3,
+                  })
                 }
                 className="w-full rounded-2xl border border-line bg-paper px-4 py-3 outline-none ring-teal/30 focus:ring-2"
               />
             </label>
             <label>
               <span className="mb-1.5 block text-sm font-medium text-ink-soft">
-                Минут в день
+                Макс. скорость (слов/мин)
               </span>
               <input
                 type="number"
-                min={10}
-                value={settings.dailyMinuteGoal}
+                min={80}
+                max={200}
+                value={settings.maxWpm}
                 onChange={(e) =>
-                  updateSettings({ dailyMinuteGoal: Number(e.target.value) || 10 })
+                  updateSettings({ maxWpm: Number(e.target.value) || 120 })
                 }
                 className="w-full rounded-2xl border border-line bg-paper px-4 py-3 outline-none ring-teal/30 focus:ring-2"
               />
@@ -195,30 +196,18 @@ export function TrackerApp() {
               />
             </label>
           </div>
-          <div className="mt-6 flex flex-wrap gap-3">
-            <button
-              type="button"
-              onClick={() => {
-                updateSettings({ dailyPageGoal: suggested });
-                showToast(`Норма обновлена: ${suggested} стр.`);
-              }}
-              className="rounded-full bg-ink px-5 py-3 text-sm font-semibold text-white"
-            >
-              Взять рекомендуемую норму
-            </button>
-            <button
-              type="button"
-              onClick={() => setPanel("none")}
-              className="rounded-full border border-line px-5 py-3 text-sm font-semibold text-ink-soft"
-            >
-              Готово
-            </button>
-          </div>
+          <button
+            type="button"
+            onClick={() => setPanel("none")}
+            className="mt-6 rounded-full bg-ink px-5 py-3 text-sm font-semibold text-white"
+          >
+            Готово
+          </button>
         </section>
       ) : null}
 
-      <section className="mt-10 grid gap-6 lg:grid-cols-[1.1fr_0.9fr]">
-        <div className="animate-rise-delay-1 rounded-[28px] border border-line bg-panel p-6 shadow-[var(--shadow)] backdrop-blur-md sm:p-8">
+      <section className="mt-10 grid gap-6 lg:grid-cols-[1.15fr_0.85fr]">
+        <div className="animate-rise-delay-1 rounded-[28px] border border-line bg-panel p-6 shadow-[var(--shadow)] sm:p-8">
           <div className="flex flex-col gap-8 sm:flex-row sm:items-center sm:justify-between">
             <div>
               <p className="text-xs font-semibold uppercase tracking-[0.16em] text-teal">
@@ -228,48 +217,57 @@ export function TrackerApp() {
                 Привет, {settings.displayName || "студент"}
               </h2>
               <p className="mt-3 max-w-md text-ink-soft">
-                {pagesToday >= settings.dailyPageGoal
-                  ? "Норма закрыта. Можно чуть больше — стрик скажет спасибо."
-                  : pagesToday === 0
-                    ? "Ещё ни одной страницы. Открой самую срочную книгу и сделай короткую сессию."
-                    : `Ещё ${Math.max(0, settings.dailyPageGoal - pagesToday)} стр. до дневной нормы.`}
+                {guidedTodayTotal >= dayGoal
+                  ? "Дневная норма курсором закрыта. Можно остановиться без чувства вины."
+                  : guidedTodayTotal === 0
+                    ? "Ещё ни одной страницы курсором. Выбери срочную книгу и просто зажми кнопку."
+                    : `Ещё ${Math.max(0, dayGoal - guidedTodayTotal)} стр. курсором до нормы (${planDoneCount}/${settings.booksPerDay} книг).`}
               </p>
               <div className="mt-6 flex flex-wrap gap-3">
-                {selectedBook && selectedBook.status !== "done" ? (
+                {plan[0] && !plan[0].done ? (
                   <button
                     type="button"
-                    onClick={() => openLog(selectedBook)}
+                    onClick={() => openRead(plan[0].book)}
                     className="rounded-full bg-teal px-5 py-3 text-sm font-semibold text-white hover:bg-teal-deep"
                   >
-                    Читать сейчас
+                    Читать сейчас: {plan[0].book.title.slice(0, 28)}
+                    {plan[0].book.title.length > 28 ? "…" : ""}
                   </button>
+                ) : books.length === 0 ? (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setPanel("add")}
+                      className="rounded-full bg-teal px-5 py-3 text-sm font-semibold text-white"
+                    >
+                      Добавить первую книгу
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        seedDemo();
+                        showToast("Демо-полка из 4 книг");
+                      }}
+                      className="rounded-full border border-line bg-white/70 px-5 py-3 text-sm font-semibold text-ink"
+                    >
+                      Загрузить демо
+                    </button>
+                  </>
                 ) : (
                   <button
                     type="button"
-                    onClick={() => setPanel("add")}
-                    className="rounded-full bg-teal px-5 py-3 text-sm font-semibold text-white hover:bg-teal-deep"
+                    onClick={() => selectedBook && openRead(selectedBook)}
+                    className="rounded-full bg-teal px-5 py-3 text-sm font-semibold text-white"
                   >
-                    Добавить первую книгу
+                    Продолжить чтение
                   </button>
                 )}
-                {books.length === 0 ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      seedDemo();
-                      showToast("Демо-полка загружена");
-                    }}
-                    className="rounded-full border border-line bg-white/70 px-5 py-3 text-sm font-semibold text-ink"
-                  >
-                    Загрузить демо
-                  </button>
-                ) : null}
               </div>
             </div>
             <ProgressRing
               value={goalProgress}
-              label={`${pagesToday}`}
-              sublabel={`из ${settings.dailyPageGoal}`}
+              label={`${guidedTodayTotal}`}
+              sublabel={`из ${dayGoal}`}
             />
           </div>
 
@@ -277,24 +275,61 @@ export function TrackerApp() {
             <Stat
               label="Стрик"
               value={`${streak} дн.`}
-              hint={streak > 0 ? "Не рви цепочку" : "Начни сегодня"}
+              hint={streak > 0 ? "Не рви цепочку" : "Начни с 1 страницы"}
               glow={streak > 0}
             />
+            <Stat label="Минут сегодня" value={`${minutesToday}`} hint={`${pagesToday} стр. всего`} />
             <Stat
-              label="Минут сегодня"
-              value={`${minutesToday}`}
-              hint={`цель ${settings.dailyMinuteGoal}`}
-            />
-            <Stat
-              label="Активных книг"
-              value={`${activeBooks.length}`}
-              hint={`${books.filter((b) => b.status === "done").length} закрыто`}
+              label="Книг в плане"
+              value={`${planDoneCount}/${settings.booksPerDay}`}
+              hint={`по ${settings.pagesPerBookPerDay} стр.`}
             />
           </div>
         </div>
 
         <div className="animate-rise-delay-2 flex flex-col gap-6">
-          <div className="rounded-[28px] border border-line bg-white/75 p-6 shadow-[var(--shadow)] backdrop-blur-md">
+          <div className="rounded-[28px] border border-line bg-ink p-6 text-white shadow-[var(--shadow)]">
+            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-white/55">
+              План на сегодня
+            </p>
+            <h3 className="mt-2 font-serif text-2xl">
+              {settings.booksPerDay}×{settings.pagesPerBookPerDay} без самообмана
+            </h3>
+            <div className="mt-5 space-y-3">
+              {plan.length === 0 ? (
+                <p className="text-sm leading-relaxed text-white/70">
+                  Добавь книги с PDF или возьми демо — план соберётся сам.
+                </p>
+              ) : (
+                plan.map((item) => (
+                  <button
+                    key={item.book.id}
+                    type="button"
+                    onClick={() => openRead(item.book)}
+                    className="flex w-full items-center justify-between gap-3 rounded-2xl bg-white/8 px-4 py-3 text-left hover:bg-white/12"
+                  >
+                    <div className="min-w-0">
+                      <p className="truncate font-medium">{item.book.title}</p>
+                      <p className="mt-1 text-sm text-white/60">
+                        {item.guidedToday}/{item.goal} стр. курсором
+                      </p>
+                    </div>
+                    <span
+                      className={`shrink-0 rounded-full px-2.5 py-1 text-xs font-semibold ${
+                        item.done
+                          ? "bg-[rgba(47,125,74,0.35)] text-[#b6e6c4]"
+                          : "bg-white/10 text-white/80"
+                      }`}
+                    >
+                      {item.done ? "готово" : "читать"}
+                    </span>
+                  </button>
+                ))
+              )}
+            </div>
+          </div>
+
+          <div className="rounded-[28px] border border-line bg-white/75 p-6 shadow-[var(--shadow)]">
             <div className="flex items-center justify-between">
               <h3 className="font-serif text-2xl text-ink">Неделя</h3>
               <span className="text-sm text-ink-soft">
@@ -303,11 +338,10 @@ export function TrackerApp() {
             </div>
             <div className="mt-5 flex h-36 items-end gap-2">
               {week.map((pages, i) => {
-                const max = Math.max(settings.dailyPageGoal, ...week, 1);
+                const max = Math.max(dayGoal, ...week, 1);
                 const height = `${Math.max(8, (pages / max) * 100)}%`;
                 const labels = ["пн", "вт", "ср", "чт", "пт", "сб", "вс"];
-                const isToday =
-                  ((new Date().getDay() + 6) % 7) === i;
+                const isToday = (new Date().getDay() + 6) % 7 === i;
                 return (
                   <div key={labels[i]} className="flex flex-1 flex-col items-center gap-2">
                     <div className="flex h-28 w-full items-end rounded-2xl bg-paper-deep/70 px-1.5 py-1.5">
@@ -331,41 +365,6 @@ export function TrackerApp() {
               })}
             </div>
           </div>
-
-          <div className="rounded-[28px] border border-line bg-ink p-6 text-white shadow-[var(--shadow)]">
-            <p className="text-xs font-semibold uppercase tracking-[0.16em] text-white/55">
-              Давление дедлайнов
-            </p>
-            <h3 className="mt-2 font-serif text-2xl">Что горит</h3>
-            <div className="mt-5 space-y-4">
-              {urgent.length === 0 ? (
-                <p className="text-sm leading-relaxed text-white/70">
-                  Пока всё в графике. Держи норму — и сессия не превратится в ночной
-                  марафон.
-                </p>
-              ) : (
-                urgent.map(({ book, pace }) => (
-                  <button
-                    key={book.id}
-                    type="button"
-                    onClick={() => openLog(book)}
-                    className="flex w-full items-center justify-between gap-3 rounded-2xl bg-white/8 px-4 py-3 text-left transition hover:bg-white/12"
-                  >
-                    <div>
-                      <p className="font-medium">{book.title}</p>
-                      <p className="mt-1 text-sm text-white/60">
-                        {pace.status === "overdue"
-                          ? "просрочено"
-                          : `${pace.daysLeft} дн.`}{" "}
-                        · ~{Math.ceil(pace.requiredPerDay)} стр./день
-                      </p>
-                    </div>
-                    <PaceBadge status={pace.status} />
-                  </button>
-                ))
-              )}
-            </div>
-          </div>
         </div>
       </section>
 
@@ -384,8 +383,8 @@ export function TrackerApp() {
           <div className="rounded-[28px] border border-dashed border-line bg-white/50 px-6 py-16 text-center">
             <h3 className="font-serif text-3xl text-ink">Полка пустая</h3>
             <p className="mx-auto mt-3 max-w-md text-ink-soft">
-              Добавь учебник с дедлайном — сервис сам посчитает, сколько страниц нужно
-              читать каждый день.
+              Страх чтения — не приговор. Добавь PDF или открой демо-текст и пройди
+              первые страницы курсором.
             </p>
             <div className="mt-6 flex flex-wrap justify-center gap-3">
               <button
@@ -414,8 +413,10 @@ export function TrackerApp() {
                 key={book.id}
                 book={book}
                 active={selectedBook?.id === book.id}
+                guidedToday={guidedPagesOnDate(sessions, today, book.id)}
+                dailyGoal={settings.pagesPerBookPerDay}
                 onSelect={() => setSelectedId(book.id)}
-                onQuickLog={() => openLog(book)}
+                onRead={() => openRead(book)}
               />
             ))}
           </div>
@@ -423,49 +424,38 @@ export function TrackerApp() {
       </section>
 
       {selectedBook ? (
-        <section className="mt-12 grid gap-6 lg:grid-cols-[1fr_0.9fr]">
-          <div className="rounded-[28px] border border-line bg-white/80 p-6 shadow-[var(--shadow)] backdrop-blur-md">
-            <div className="flex flex-wrap items-start justify-between gap-4">
-              <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-teal">
-                  Детали
-                </p>
-                <h3 className="mt-2 font-serif text-3xl text-ink">{selectedBook.title}</h3>
-                <p className="mt-1 text-ink-soft">
-                  {selectedBook.author || "Автор не указан"}
-                  {selectedBook.course ? ` · ${selectedBook.course}` : ""}
-                </p>
-              </div>
-              <PaceBadge status={bookPace(selectedBook).status} />
+        <section className="mt-12 rounded-[28px] border border-line bg-white/80 p-6 shadow-[var(--shadow)]">
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-[0.16em] text-teal">
+                Выбрано
+              </p>
+              <h3 className="mt-2 font-serif text-3xl text-ink">{selectedBook.title}</h3>
+              <p className="mt-1 text-ink-soft">
+                {selectedBook.author || "Автор не указан"}
+                {selectedBook.course ? ` · ${selectedBook.course}` : ""}
+                {selectedBook.pdfId ? " · PDF" : " · демо-текст"}
+              </p>
+              <p className="mt-2 text-sm text-ink-soft">
+                Дедлайн {formatShortDate(selectedBook.deadline)} · курсор: стр.{" "}
+                {selectedBook.guidedPageIndex + 1}
+              </p>
             </div>
-
-            <dl className="mt-6 grid gap-4 sm:grid-cols-3">
-              <Detail
-                label="Прогресс"
-                value={`${selectedBook.currentPage}/${selectedBook.totalPages}`}
-              />
-              <Detail label="Дедлайн" value={formatShortDate(selectedBook.deadline)} />
-              <Detail
-                label="Темп"
-                value={`~${Math.ceil(bookPace(selectedBook).requiredPerDay)} стр./день`}
-              />
-            </dl>
-
-            <div className="mt-6 flex flex-wrap gap-3">
+            <div className="flex flex-wrap gap-3">
               {selectedBook.status !== "done" ? (
                 <button
                   type="button"
-                  onClick={() => openLog(selectedBook)}
+                  onClick={() => openRead(selectedBook)}
                   className="rounded-full bg-ink px-5 py-3 text-sm font-semibold text-white"
                 >
-                  Записать сессию
+                  Читать курсором
                 </button>
               ) : null}
               <button
                 type="button"
                 onClick={() => {
                   if (confirm(`Удалить «${selectedBook.title}»?`)) {
-                    deleteBook(selectedBook.id);
+                    void deleteBook(selectedBook.id);
                     setSelectedId(null);
                     showToast("Книга удалена");
                   }
@@ -476,52 +466,13 @@ export function TrackerApp() {
               </button>
             </div>
           </div>
-
-          <div className="rounded-[28px] border border-line bg-panel p-6 shadow-[var(--shadow)] backdrop-blur-md">
-            <h3 className="font-serif text-2xl text-ink">Последние сессии</h3>
-            <div className="mt-5 space-y-3">
-              {recentSessions.length === 0 ? (
-                <p className="text-sm text-ink-soft">Пока нет записей чтения.</p>
-              ) : (
-                recentSessions.map((session) => {
-                  const book = books.find((b) => b.id === session.bookId);
-                  return (
-                    <div
-                      key={session.id}
-                      className="flex items-start justify-between gap-3 rounded-2xl border border-line bg-white/60 px-4 py-3"
-                    >
-                      <div>
-                        <p className="font-medium text-ink">
-                          {book?.title ?? "Удалённая книга"}
-                        </p>
-                        <p className="mt-1 text-sm text-ink-soft">
-                          {formatShortDate(session.date)} · +{session.pagesRead} стр.
-                          {session.minutes ? ` · ${session.minutes} мин.` : ""}
-                          {session.note ? ` · ${session.note}` : ""}
-                        </p>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          deleteSession(session.id);
-                          showToast("Сессия удалена");
-                        }}
-                        className="text-xs font-semibold uppercase tracking-wide text-ink-soft hover:text-rose"
-                      >
-                        Undo
-                      </button>
-                    </div>
-                  );
-                })
-              )}
-            </div>
-          </div>
         </section>
       ) : null}
 
       <footer className="mt-16 flex flex-col gap-4 border-t border-line pt-8 text-sm text-ink-soft sm:flex-row sm:items-center sm:justify-between">
         <p>
-          Данные хранятся локально в браузере — удобно для личного самоконтроля.
+          Данные и PDF хранятся локально в браузере. Курсорное чтение — основной способ
+          засчитывать страницы.
         </p>
         <button
           type="button"
@@ -544,6 +495,30 @@ export function TrackerApp() {
           {toast}
         </div>
       ) : null}
+
+      {readingBook ? (
+        <GuidedReader
+          book={readingBook}
+          maxWpm={settings.maxWpm}
+          pagesGoalToday={settings.pagesPerBookPerDay}
+          guidedToday={guidedPagesOnDate(sessions, today, readingBook.id)}
+          onClose={() => setReadingId(null)}
+          onSave={(input) => {
+            saveGuidedProgress({
+              bookId: readingBook.id,
+              guidedPageIndex: input.guidedPageIndex,
+              guidedChunkIndex: input.guidedChunkIndex,
+              pagesCompleted: input.pagesCompleted,
+              minutes: input.minutes,
+            });
+            showToast(
+              input.pagesCompleted > 0
+                ? `+${input.pagesCompleted} стр. курсором`
+                : "Прогресс курсора сохранён",
+            );
+          }}
+        />
+      ) : null}
     </div>
   );
 }
@@ -564,23 +539,10 @@ function Stat({
       <p className="text-xs font-semibold uppercase tracking-[0.14em] text-ink-soft">
         {label}
       </p>
-      <p
-        className={`mt-2 font-serif text-3xl text-ink ${glow ? "streak-glow" : ""}`}
-      >
+      <p className={`mt-2 font-serif text-3xl text-ink ${glow ? "streak-glow" : ""}`}>
         {value}
       </p>
       <p className="mt-1 text-sm text-ink-soft">{hint}</p>
-    </div>
-  );
-}
-
-function Detail({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="rounded-2xl bg-paper px-4 py-3">
-      <dt className="text-xs font-semibold uppercase tracking-[0.14em] text-ink-soft">
-        {label}
-      </dt>
-      <dd className="mt-1 text-lg font-semibold text-ink">{value}</dd>
     </div>
   );
 }
